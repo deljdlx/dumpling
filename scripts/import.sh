@@ -1,21 +1,11 @@
-#!/usr/bin/env bash
-# Import MySQL avec prompts sexy powered by gum 🫧
 
-set -euo pipefail
+source "$(dirname "$0")/_utils.sh"
 
-#-----------------------------#
-#  Préchecks
-#-----------------------------#
-command -v gum >/dev/null 2>&1 || {
-  echo "❌ gum n'est pas installé."
-  echo "👉 Installe-le puis relance ce script."
-  exit 1
-}
+SCRIPT_DIR="$(get_script_dir)"
+import_env "$SCRIPT_DIR"
 
-command -v mysql >/dev/null 2>&1 || {
-  gum style --foreground 196 "❌ mysql client introuvable. Installe-le avant de continuer."
-  exit 1
-}
+check_require_cmd gum "❌ gum n'est pas installé.\n👉 Installe-le puis relance ce script."
+check_require_cmd_gum mysql "❌ mysql client introuvable. Installe-le avant de continuer."
 
 if command -v curl >/dev/null 2>&1; then
   DL_CMD="curl"
@@ -26,23 +16,9 @@ else
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VAR_PATH=$SCRIPT_DIR/../var
 DOWNLOADS_ROOT_PATH="$VAR_PATH/downloads"
 
-# import .env if present
-if [ -f $SCRIPT_DIR/../.env ]; then
-  . $SCRIPT_DIR/../.env
-fi
-
-
-#-----------------------------#
-#  Gestion erreurs globale
-#-----------------------------#
-cleanup_on_error() {
-  gum style --border normal --border-foreground 196 --margin "1 0" --padding "1 2" \
-    "💥 Une erreur est survenue. Vérifie les messages ci-dessus."
-}
 trap cleanup_on_error ERR
 
 #-----------------------------#
@@ -82,15 +58,11 @@ gum style --foreground 82 "✅ Téléchargement OK."
 #-----------------------------#
 # 3-5. Infos MySQL
 #-----------------------------#
+
 DB_NAME=$(gum input --prompt "🗄️ Nom de la base à utiliser/créer : ")
 [ -z "$DB_NAME" ] && gum style --foreground 196 "❌ Nom de base vide." && exit 1
 
-DB_USER=$(gum input --prompt "👤 Utilisateur MySQL : ")
-[ -z "$DB_USER" ] && gum style --foreground 196 "❌ Utilisateur vide." && exit 1
-
-DB_PASS=$(gum input --password --prompt "🔑 Mot de passe MySQL : ")
-
-gum style --foreground 99 "🔗 Cible: $DB_USER@$MYSQL_HOST:$MYSQL_PORT / $DB_NAME"
+. $SCRIPT_DIR/includes/mysql-connect.sh
 
 #-----------------------------#
 # 6-7. Création / recréation base
@@ -98,17 +70,22 @@ gum style --foreground 99 "🔗 Cible: $DB_USER@$MYSQL_HOST:$MYSQL_PORT / $DB_NA
 
 # test connection
 
-# Test connection
-gum spin --spinner dot --title "Test connexion MySQL..." -- \
-bash -c 'mysql \
-  -h"'"$MYSQL_HOST"'" \
-  -P"'"$MYSQL_PORT"'" \
-  -u"'"$DB_USER"'" \
-  -p"'"$DB_PASS"'" \
-  -e "SELECT 1" >/dev/null 2>&1' || {
-    gum style --foreground 196 "❌ Échec de la connexion MySQL. Vérifie l'hôte, le port, l'utilisateur ou le mot de passe."
-    exit 1
-}
+testConnection "$MYSQL_HOST" "$MYSQL_PORT" "$DB_USER" "$DB_PASS"
+
+echo ok
+exit 0
+
+# # Test connection
+# gum spin --spinner dot --title "Test connexion MySQL..." -- \
+# bash -c 'mysql \
+#   -h"'"$MYSQL_HOST"'" \
+#   -P"'"$MYSQL_PORT"'" \
+#   -u"'"$DB_USER"'" \
+#   -p"'"$DB_PASS"'" \
+#   -e "SELECT 1" >/dev/null 2>&1' || {
+#     gum style --foreground 196 "❌ Échec de la connexion MySQL. Vérifie l'hôte, le port, l'utilisateur ou le mot de passe."
+#     exit 1
+# }
 
 
 DB_EXISTS=0

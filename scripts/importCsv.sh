@@ -1,35 +1,15 @@
-#!/usr/bin/env bash
-# Import CSV -> MySQL avec UI gum
-# ⚠️ Nécessite: gum, mysql (client), accès LOAD DATA LOCAL INFILE
 
-set -euo pipefail
+source "$(dirname "$0")/_utils.sh"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(get_script_dir)"
+import_env "$SCRIPT_DIR"
 
-# import .env if present (optionnel)
-if [ -f "$SCRIPT_DIR/../.env" ]; then
-  # shellcheck disable=SC1091
-  . "$SCRIPT_DIR/../.env"
-fi
-
-########################################
-# Préchecks
-########################################
-
-command -v gum >/dev/null 2>&1 || {
-  echo "❌ gum n'est pas installé."
-  echo "👉 https://github.com/charmbracelet/gum"
-  exit 1
-}
-
-command -v mysql >/dev/null 2>&1 || {
-  gum style --foreground 196 "❌ mysql client introuvable."
-  exit 1
-}
+check_require_cmd gum "❌ gum n'est pas installé.\n👉 https://github.com/charmbracelet/gum"
+check_require_cmd_gum mysql "❌ mysql client introuvable."
 
 gum style --border double --border-foreground 213 --margin "1 0" --padding "1 2" \
-"📊 Import CSV → MySQL" \
-"On va vérifier, nommer proprement, créer la table et ingérer les données."
+  "📊 Import CSV → MySQL" \
+  "On va vérifier, nommer proprement, créer la table et ingérer les données."
 
 ########################################
 # Saisie chemin CSV
@@ -67,16 +47,16 @@ DB_NAME=$(gum input --prompt "🗄️ Nom de la base MySQL : ")
 TABLE_NAME=$(gum input --prompt "📌 Nom de la table à créer : ")
 [ -z "$TABLE_NAME" ] && { gum style --foreground 196 "❌ Nom de table vide."; exit 1; }
 
-DB_USER=$(gum input --prompt "👤 Utilisateur MySQL : ")
-[ -z "$DB_USER" ] && { gum style --foreground 196 "❌ Utilisateur vide."; exit 1; }
 
-DB_PASS=$(gum input --password --prompt "🔑 Mot de passe MySQL : ")
+. $SCRIPT_DIR/includes/mysql-connect.sh
 
-MYSQL_HOST=$(gum input --prompt "🌍 Host MySQL (défaut 127.0.0.1) : " --value "${MYSQL_HOST:-127.0.0.1}")
-[ -z "$MYSQL_HOST" ] && MYSQL_HOST="127.0.0.1"
 
-MYSQL_PORT=$(gum input --prompt "🔌 Port MySQL (défaut 3306) : " --value "${MYSQL_PORT:-3306}")
-[ -z "$MYSQL_PORT" ] && MYSQL_PORT="3306"
+
+# DB_USER=$(gum input --prompt "👤 Utilisateur MySQL : ")
+# [ -z "$DB_USER" ] && { gum style --foreground 196 "❌ Utilisateur vide."; exit 1; }
+
+# DB_PASS=$(gum input --password --prompt "🔑 Mot de passe MySQL : ")
+
 
 gum style --foreground 99 "🔗 Cible: $DB_USER@$MYSQL_HOST:$MYSQL_PORT / $DB_NAME ($TABLE_NAME)"
 
