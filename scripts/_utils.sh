@@ -2,7 +2,7 @@
 
 # Factorised utils for import scripts
 
-set -euo pipefail
+# set -euo pipefail
 
 # Get script directory
 get_script_dir() {
@@ -60,4 +60,34 @@ testConnection() {
         gum style --foreground 196 "❌ Échec de la connexion MySQL. Vérifie l'hôte, le port, l'utilisateur ou le mot de passe."
         exit 1
     fi
+}
+
+function downloadFile() {
+    local URL="$1"
+    local OUTPUT_PATH="$2"
+
+    if command -v curl >/dev/null 2>&1; then
+        DL_CMD="curl"
+    elif command -v wget >/dev/null 2>&1; then
+        DL_CMD="wget"
+    else
+        gum style --foreground 196 "❌ curl ou wget requis pour télécharger le fichier."
+        exit 1
+    fi
+
+
+    gum style --foreground 111 "📥 Fichier cible : $DOWNLOAD_PATH"
+
+    #-----------------------------#
+    # 2. Téléchargement
+    #-----------------------------#
+    gum spin --spinner dot --title "Téléchargement en cours..." -- \
+    bash -c '
+    if [ "'"$DL_CMD"'" = "curl" ]; then
+        curl -fSL "'"$SQL_URL"'" -o "'"$DOWNLOAD_PATH"'"
+    else
+        wget -q "'"$SQL_URL"'" -O "'"$DOWNLOAD_PATH"'"
+    fi
+    '
+    gum style --foreground 82 "✅ Téléchargement OK."
 }

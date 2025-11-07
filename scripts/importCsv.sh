@@ -50,42 +50,21 @@ TABLE_NAME=$(gum input --prompt "📌 Nom de la table à créer : ")
 
 . $SCRIPT_DIR/includes/mysql-connect.sh
 
+testConnection "$MYSQL_HOST" "$MYSQL_PORT" "$DB_USER" "$DB_PASS"
 
+. $SCRIPT_DIR/includes/create-db.sh
 
-# DB_USER=$(gum input --prompt "👤 Utilisateur MySQL : ")
-# [ -z "$DB_USER" ] && { gum style --foreground 196 "❌ Utilisateur vide."; exit 1; }
-
-# DB_PASS=$(gum input --password --prompt "🔑 Mot de passe MySQL : ")
-
-
-gum style --foreground 99 "🔗 Cible: $DB_USER@$MYSQL_HOST:$MYSQL_PORT / $DB_NAME ($TABLE_NAME)"
-
-# Vérif base ou création
-if mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$DB_USER" -p"$DB_PASS" \
-    -e "USE \`$DB_NAME\`;" >/dev/null 2>&1; then
-  gum style --foreground 82 "✅ Base '$DB_NAME' trouvée."
-else
-  gum style --foreground 214 "⚠️ La base '$DB_NAME' n'existe pas."
-  if gum confirm "🆕 La créer maintenant ?"; then
-    if mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$DB_USER" -p"$DB_PASS" \
-        -e "CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"; then
-      gum style --foreground 82 "✅ Base '$DB_NAME' créée."
-    else
-      gum style --foreground 196 "❌ Impossible de créer la base '$DB_NAME'."
-      exit 1
-    fi
-  else
-    gum style --foreground 196 "❌ Sans base valide, on s'arrête là."
-    exit 1
-  fi
-fi
 
 ########################################
 # Séparateur CSV
 ########################################
 
-SEP_INPUT=$(gum input --prompt "🔹 Séparateur CSV (ex: , ; \\t |) : " --value ",")
-[ -z "$SEP_INPUT" ] && SEP_INPUT=","
+SEP_INPUT=$(gum input --prompt "🔹 Séparateur CSV (ex: , ; \\t |) : " --value "")
+[ -z "$SEP_INPUT" ] && SEP_INPUT=""
+if [ -z "$SEP_INPUT" ]; then
+  gum style --foreground 196 "❌ Séparateur vide."
+  exit 1
+fi
 
 if [ "$SEP_INPUT" = '\t' ]; then
   SEP=$'\t'
@@ -289,42 +268,56 @@ done
 
 # Séparateur pour MySQL
 if [ "$SEP" = $'\t' ]; then
-  MYSQL_SEP='\t'
+  MYSQL_SEP='\t'      # tabulation
 else
-  MYSQL_SEP="$SEP"
+  MYSQL_SEP="$SEP"    # ',', ';', '|', etc.
 fi
 
+# IGNORE 1 LINES si header consommé
 IGNORE_CLAUSE=""
 if [ "$IGNORE_FIRST_LINE" -eq 1 ]; then
   IGNORE_CLAUSE="IGNORE 1 LINES"
 fi
 
-CSV_ESCAPED=$(printf "%s" "$CSV_PATH" | sed "s/'/''/g")
-
-# Construction du LOAD DATA
-read -r -d '' LOAD_SQL <<EOF || true
-LOAD DATA LOCAL INFILE '${CSV_ESCAPED}'
-INTO TABLE \`${TABLE_NAME}\`
-CHARACTER SET utf8mb4
-FIELDS TERMINATED BY '${MYSQL_SEP}'
-ENCLOSED BY '"'
-ESCAPED BY '\\\\'
-LINES TERMINATED BY '\n'
-${IGNORE_CLAUSE}
-(${COL_LIST});
-EOF
+# Liste des colonnes
+COL_LIST=""
+for col in "${FINAL_COLS[@]}"; do
+  [ -n "$COL_LIST" ] && COL_LIST+=", "
+  COL_LIST+="\`$col\`"
+done
 
 gum style --foreground 111 "📥 Import des données dans '$TABLE_NAME'..."
 
+# Config FIELDS/ENCLOSED/ESCAPED adaptée :
+# - Pour '|' : on NE JOUE PAS avec les guillemets → brut
+# - Pour les autres (vrai CSV) : on active le combo classique
+FIELDS_CLAUSE="FIELDS TERMINATED BY '${MYSQL_SEP}'"
+if [ "$MYSQL_SEP" != '|' ]; then
+  FIELDS_CLAUSE+=" OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\"'"
+fi
+
 if mysql --local-infile=1 \
     -h"$MYSQL_HOST" -P"$MYSQL_PORT" \
-    -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" \
-    -e "$LOAD_SQL"; then
+    -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" <<EOF
+SET SESSION sql_mode = REPLACE(@@sql_mode, 'STRICT_ALL_TABLES', '');
+SET SESSION sql_mode = REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', '');
+
+LOAD DATA LOCAL INFILE '${CSV_PATH}'
+INTO TABLE \`${TABLE_NAME}\`
+CHARACTER SET utf8mb4
+${FIELDS_CLAUSE}
+LINES TERMINATED BY '\n'
+${IGNORE_CLAUSE}
+(${COL_LIST});
+
+SELECT COUNT(*) AS rows_loaded FROM \`${TABLE_NAME}\`;
+EOF
+then
   gum style --border rounded --border-foreground 82 --padding "1 2" --margin "1 0" \
-    "🎉 Import terminé avec succès." \
+    "🎉 Import terminé." \
     "Base : $DB_NAME" \
     "Table : $TABLE_NAME"
 else
-  gum style --foreground 196 "❌ Erreur lors de l'import des données."
+  gum style --foreground 196 "❌ Erreur lors de l'import des données (LOAD DATA LOCAL INFILE)."
   exit 1
 fi

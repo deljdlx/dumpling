@@ -7,14 +7,6 @@ import_env "$SCRIPT_DIR"
 check_require_cmd gum "❌ gum n'est pas installé.\n👉 Installe-le puis relance ce script."
 check_require_cmd_gum mysql "❌ mysql client introuvable. Installe-le avant de continuer."
 
-if command -v curl >/dev/null 2>&1; then
-  DL_CMD="curl"
-elif command -v wget >/dev/null 2>&1; then
-  DL_CMD="wget"
-else
-  gum style --foreground 196 "❌ curl ou wget requis pour télécharger le fichier."
-  exit 1
-fi
 
 VAR_PATH=$SCRIPT_DIR/../var
 DOWNLOADS_ROOT_PATH="$VAR_PATH/downloads"
@@ -27,8 +19,21 @@ trap cleanup_on_error ERR
 gum style --border double --border-foreground 212 --margin "1 0" --padding "1 2" \
 "🐬 Import MySQL Assistant" "On va télécharger, créer, importer & nettoyer. Pose ton café et répond."
 
+
+
 #-----------------------------#
-# 1. URL du fichier SQL
+# Infos MySQL
+#-----------------------------#
+
+DB_NAME=$(gum input --prompt "🗄️ Nom de la base à utiliser/créer : ")
+[ -z "$DB_NAME" ] && gum style --foreground 196 "❌ Nom de base vide." && exit 1
+
+. $SCRIPT_DIR/includes/mysql-connect.sh
+
+testConnection "$MYSQL_HOST" "$MYSQL_PORT" "$DB_USER" "$DB_PASS"
+
+#-----------------------------#
+# Download
 #-----------------------------#
 SQL_URL=$(gum input \
   --placeholder "URL du dump (.sql, .sql.gz, .tar.gz, .tgz)" \
@@ -39,81 +44,12 @@ SQL_URL=$(gum input \
 FILENAME=$(basename "${SQL_URL%%\?*}")
 DOWNLOAD_PATH="$DOWNLOADS_ROOT_PATH/$FILENAME"
 
-gum style --foreground 111 "📥 Fichier cible : $DOWNLOAD_PATH"
+downloadFile "$SQL_URL" "$DOWNLOAD_PATH"
+
+
 
 #-----------------------------#
-# 2. Téléchargement
-#-----------------------------#
-gum spin --spinner dot --title "Téléchargement en cours..." -- \
-bash -c '
-  if [ "'"$DL_CMD"'" = "curl" ]; then
-    curl -fSL "'"$SQL_URL"'" -o "'"$DOWNLOAD_PATH"'"
-  else
-    wget -q "'"$SQL_URL"'" -O "'"$DOWNLOAD_PATH"'"
-  fi
-'
-
-gum style --foreground 82 "✅ Téléchargement OK."
-
-#-----------------------------#
-# 3-5. Infos MySQL
-#-----------------------------#
-
-DB_NAME=$(gum input --prompt "🗄️ Nom de la base à utiliser/créer : ")
-[ -z "$DB_NAME" ] && gum style --foreground 196 "❌ Nom de base vide." && exit 1
-
-. $SCRIPT_DIR/includes/mysql-connect.sh
-
-#-----------------------------#
-# 6-7. Création / recréation base
-#-----------------------------#
-
-# test connection
-
-testConnection "$MYSQL_HOST" "$MYSQL_PORT" "$DB_USER" "$DB_PASS"
-
-echo ok
-exit 0
-
-# # Test connection
-# gum spin --spinner dot --title "Test connexion MySQL..." -- \
-# bash -c 'mysql \
-#   -h"'"$MYSQL_HOST"'" \
-#   -P"'"$MYSQL_PORT"'" \
-#   -u"'"$DB_USER"'" \
-#   -p"'"$DB_PASS"'" \
-#   -e "SELECT 1" >/dev/null 2>&1' || {
-#     gum style --foreground 196 "❌ Échec de la connexion MySQL. Vérifie l'hôte, le port, l'utilisateur ou le mot de passe."
-#     exit 1
-# }
-
-
-DB_EXISTS=0
-if mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$DB_USER" -p"$DB_PASS" \
-  -e "USE \`$DB_NAME\`;" >/dev/null 2>&1; then
-  DB_EXISTS=1
-fi
-
-if [ "$DB_EXISTS" -eq 0 ]; then
-  gum style --foreground 81 "🆕 La base n'existe pas, création..."
-  gum spin --spinner dot --title "Création base '$DB_NAME'..." -- \
-  mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$DB_USER" -p"$DB_PASS" \
-    -e "CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-  gum style --foreground 82 "✅ Base '$DB_NAME' créée."
-else
-  gum style --foreground 214 "⚠️ La base '$DB_NAME' existe déjà."
-  if gum confirm "🔥 La supprimer puis la recréer ?"; then
-    gum spin --spinner dot --title "Drop + recreate '$DB_NAME'..." -- \
-    mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$DB_USER" -p"$DB_PASS" \
-      -e "DROP DATABASE \`$DB_NAME\`; CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-    gum style --foreground 82 "✅ Base '$DB_NAME' recréée proprement."
-  else
-    gum style --foreground 82 "✅ Ok, on garde la base existante. Import par dessus."
-  fi
-fi
-
-#-----------------------------#
-# 8. Décompression
+# Décompression
 #-----------------------------#
 gum style --foreground 111 "📦 Analyse du fichier : $FILENAME"
 
@@ -149,7 +85,14 @@ case "$FILENAME" in
 esac
 
 #-----------------------------#
-# 9. Import dans MySQL
+# Création / recréation base
+#-----------------------------#
+
+. $SCRIPT_DIR/includes/create-db.sh
+
+
+#-----------------------------#
+# Import dans MySQL
 #-----------------------------#
 gum spin --spinner dot --title "Import dans '$DB_NAME' en cours..." -- \
 bash -c 'mysql -h"'"$MYSQL_HOST"'" -P"'"$MYSQL_PORT"'" -u"'"$DB_USER"'" -p"'"$DB_PASS"'" "'"$DB_NAME"'" < "'"$SQL_FILE"'"'
@@ -157,7 +100,7 @@ bash -c 'mysql -h"'"$MYSQL_HOST"'" -P"'"$MYSQL_PORT"'" -u"'"$DB_USER"'" -p"'"$DB
 gum style --foreground 82 "✅ Import terminé avec succès."
 
 #-----------------------------#
-# 10. Nettoyage
+# Nettoyage
 #-----------------------------#
 gum spin --spinner dot --title "Nettoyage des fichiers..." -- bash -c '
   # Supprime le fichier téléchargé
@@ -173,7 +116,6 @@ gum spin --spinner dot --title "Nettoyage des fichiers..." -- bash -c '
     rm -f "'"$SQL_FILE"'"
   fi
 '
-
 gum style --foreground 82 "🧹 Nettoyage OK."
 
 #-----------------------------#
