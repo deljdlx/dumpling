@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # On travaille DANS /app/src pour que artisan trouve le projet
+    working_dir: /app/src
+    volumes:
+      - ./:/app
+    # Pas de process long-running: on utilisera `docker compose run --rm ...`
+    entrypoint: [ "bash", "-lc" ]
