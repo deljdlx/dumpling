@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 
 source "$(dirname "$0")/_utils.sh"
 
@@ -47,24 +48,20 @@ DB_NAME=$(gum input --prompt "🗄️ Nom de la base MySQL : ")
 TABLE_NAME=$(gum input --prompt "📌 Nom de la table à créer : ")
 [ -z "$TABLE_NAME" ] && { gum style --foreground 196 "❌ Nom de table vide."; exit 1; }
 
-
-. $SCRIPT_DIR/includes/mysql-connect.sh
-
+. "$SCRIPT_DIR/includes/mysql-connect.sh"
 testConnection "$MYSQL_HOST" "$MYSQL_PORT" "$DB_USER" "$DB_PASS"
 
-. $SCRIPT_DIR/includes/create-db.sh
-
+. "$SCRIPT_DIR/includes/create-db.sh"
 
 ########################################
 # Séparateur CSV
 ########################################
 
 SEP_INPUT=$(gum input --prompt "🔹 Séparateur CSV (ex: , ; \\t |) : " --value "")
-[ -z "$SEP_INPUT" ] && SEP_INPUT=""
-if [ -z "$SEP_INPUT" ]; then
+[ -z "$SEP_INPUT" ] && {
   gum style --foreground 196 "❌ Séparateur vide."
   exit 1
-fi
+}
 
 if [ "$SEP_INPUT" = '\t' ]; then
   SEP=$'\t'
@@ -113,13 +110,8 @@ normalize_col() {
   local input="$1"
   local idx="$2"
 
-  # trim
   input=$(printf "%s" "$input" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-
-  # minuscules
   input=$(printf "%s" "$input" | tr '[:upper:]' '[:lower:]')
-
-  # accents → ascii (fréquent)
   input=$(printf "%s" "$input" | sed \
     -e 's/[àáâãäå]/a/g' \
     -e 's/[æ]/ae/g' \
@@ -131,16 +123,9 @@ normalize_col() {
     -e 's/[ùúûü]/u/g' \
     -e 's/[ýÿ]/y/g' \
     -e 's/œ/oe/g')
-
-  # non [a-z0-9] → _
   input=$(printf "%s" "$input" | sed -E 's/[^a-z0-9]+/_/g')
-
-  # compresse / trim _
   input=$(printf "%s" "$input" | sed -E 's/^_+//; s/_+$//; s/_+/_/g')
-
-  # fallback
   [ -z "$input" ] && input="col$idx"
-
   printf "%s" "$input"
 }
 
@@ -183,7 +168,6 @@ if [ "$HEADERS_OK" -eq 1 ]; then
       exit 1
     fi
   fi
-
 else
   gum style --foreground 214 "ℹ️ La première ligne n'est pas considérée comme en-têtes fiables."
 
@@ -202,6 +186,42 @@ else
   for ((k=1; k<=COL_COUNT; k++)); do
     FINAL_COLS+=("col$k")
   done
+fi
+
+########################################
+# Option: colonne auto-incrément
+########################################
+
+USE_AI=0
+AI_COL=""
+
+if gum confirm "➕ Créer un champ auto incrément (PRIMARY KEY) ?"; then
+  default_name="id"
+  # si 'id' existe déjà, propose 'row_id'
+  for c in "${FINAL_COLS[@]}"; do
+    if [ "$c" = "id" ]; then
+      default_name="row_id"
+      break
+    fi
+  done
+
+  AI_COL=$(gum input --prompt "🔑 Nom de la colonne auto-incrément : " --value "$default_name")
+  [ -z "$AI_COL" ] && AI_COL="$default_name"
+
+  # normalisation légère pour être safe
+  AI_COL=$(normalize_col "$AI_COL" 0)
+
+  # sécurité : éviter collision
+  for c in "${FINAL_COLS[@]}"; do
+    if [ "$c" = "$AI_COL" ]; then
+      gum style --foreground 196 "❌ Le nom '$AI_COL' existe déjà parmi les colonnes détectées."
+      exit 1
+    fi
+  done
+
+  USE_AI=1
+
+  gum style --foreground 82 "✅ Colonne auto-incrément utilisée : \`$AI_COL\`"
 fi
 
 ########################################
@@ -233,11 +253,21 @@ fi
 ########################################
 
 CREATE_SQL="CREATE TABLE \`$TABLE_NAME\` ("
+
+if [ "$USE_AI" -eq 1 ]; then
+  CREATE_SQL+="\`$AI_COL\` INT UNSIGNED NOT NULL AUTO_INCREMENT, "
+fi
+
 for idx in "${!FINAL_COLS[@]}"; do
   col="${FINAL_COLS[$idx]}"
   [ "$idx" -gt 0 ] && CREATE_SQL+=", "
   CREATE_SQL+="\`$col\` TEXT NULL"
 done
+
+if [ "$USE_AI" -eq 1 ]; then
+  CREATE_SQL+=", PRIMARY KEY (\`$AI_COL\`)"
+fi
+
 CREATE_SQL+=");"
 
 gum style --foreground 111 "🏗️ Création de la table '$TABLE_NAME'..."
@@ -252,13 +282,12 @@ fi
 
 ########################################
 # Construction liste colonnes pour LOAD DATA
+# (⚠️ sans la colonne auto-incrément)
 ########################################
 
 COL_LIST=""
 for col in "${FINAL_COLS[@]}"; do
-  if [ -n "$COL_LIST" ]; then
-    COL_LIST+=", "
-  fi
+  [ -n "$COL_LIST" ] && COL_LIST+=", "
   COL_LIST+="\`$col\`"
 done
 
@@ -268,33 +297,24 @@ done
 
 # Séparateur pour MySQL
 if [ "$SEP" = $'\t' ]; then
-  MYSQL_SEP='\t'      # tabulation
+  MYSQL_SEP='\t'
 else
-  MYSQL_SEP="$SEP"    # ',', ';', '|', etc.
+  MYSQL_SEP="$SEP"
 fi
 
-# IGNORE 1 LINES si header consommé
 IGNORE_CLAUSE=""
 if [ "$IGNORE_FIRST_LINE" -eq 1 ]; then
   IGNORE_CLAUSE="IGNORE 1 LINES"
 fi
 
-# Liste des colonnes
-COL_LIST=""
-for col in "${FINAL_COLS[@]}"; do
-  [ -n "$COL_LIST" ] && COL_LIST+=", "
-  COL_LIST+="\`$col\`"
-done
-
-gum style --foreground 111 "📥 Import des données dans '$TABLE_NAME'..."
-
-# Config FIELDS/ENCLOSED/ESCAPED adaptée :
-# - Pour '|' : on NE JOUE PAS avec les guillemets → brut
-# - Pour les autres (vrai CSV) : on active le combo classique
+# FIELDS clause :
 FIELDS_CLAUSE="FIELDS TERMINATED BY '${MYSQL_SEP}'"
 if [ "$MYSQL_SEP" != '|' ]; then
   FIELDS_CLAUSE+=" OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\"'"
 fi
+
+gum style --foreground 111 "📥 Import des données dans '$TABLE_NAME'..."
+gum style --foreground 99  "ℹ️ Mode FIELDS: ${FIELDS_CLAUSE}"
 
 if mysql --local-infile=1 \
     -h"$MYSQL_HOST" -P"$MYSQL_PORT" \
