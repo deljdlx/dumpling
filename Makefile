@@ -93,3 +93,6 @@ clean:
 nuke:
 	@read -p '⚠️  Supprimer totalement ./src ? [y/N] ' ans; \
 	if [[ $$ans == y || $$ans == Y ]]; then rm -rf src; gum style --foreground 196 "💥 ./src supprimé."; else gum style --foreground 240 "Annulé."; fi
+
+importDb:
+	@./scripts/import.sh
