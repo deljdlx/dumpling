@@ -96,3 +96,6 @@ nuke:
 
 importDb:
 	@./scripts/import.sh
+
+importCsv:
+	@./scripts/importCsv.sh
