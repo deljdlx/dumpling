@@ -18,12 +18,12 @@ gum style --border double --border-foreground 213 --margin "1 0" --padding "1 2"
 
 CSV_PATH=$(gum input --prompt "📂 Chemin du fichier CSV : ")
 
-if [ -z "${CSV_PATH}" ]; then
+if [ -z "$CSV_PATH" ]; then
   gum style --foreground 196 "❌ Chemin vide. Abort."
   exit 1
 fi
 
-if [ ! -f "${CSV_PATH}" ]; then
+if [ ! -f "$CSV_PATH" ]; then
   gum style --foreground 196 "❌ Fichier introuvable : ${CSV_PATH}"
   exit 1
 fi
@@ -39,8 +39,11 @@ esac
 gum style --foreground 82 "✅ Fichier trouvé et extension .csv valide."
 
 ########################################
-# Connexion MySQL (DB, user, pass, host, port)
+# Connexion MySQL
 ########################################
+
+# Charge fonctions + variables MYSQL_HOST / PORT / USER / PASS
+. "$SCRIPT_DIR/includes/mysql-connect.sh"
 
 DB_NAME=$(gum input --prompt "🗄️ Nom de la base MySQL : ")
 [ -z "$DB_NAME" ] && { gum style --foreground 196 "❌ Nom de base vide."; exit 1; }
@@ -48,9 +51,9 @@ DB_NAME=$(gum input --prompt "🗄️ Nom de la base MySQL : ")
 TABLE_NAME=$(gum input --prompt "📌 Nom de la table à créer : ")
 [ -z "$TABLE_NAME" ] && { gum style --foreground 196 "❌ Nom de table vide."; exit 1; }
 
-. "$SCRIPT_DIR/includes/mysql-connect.sh"
 testConnection "$MYSQL_HOST" "$MYSQL_PORT" "$DB_USER" "$DB_PASS"
 
+# Création base si besoin
 . "$SCRIPT_DIR/includes/create-db.sh"
 
 ########################################
@@ -88,7 +91,7 @@ if [ "$COL_COUNT" -eq 0 ]; then
 fi
 
 gum style --border normal --border-foreground 111 --padding "1 2" \
-"🧐 Colonnes détectées dans la première ligne :"
+  "🧐 Colonnes détectées dans la première ligne :"
 
 i=1
 for col in "${RAW_COLS[@]}"; do
@@ -147,7 +150,7 @@ if [ "$HEADERS_OK" -eq 1 ]; then
   done
 
   gum style --border normal --border-foreground 111 --padding "1 2" \
-  "🔤 Noms normalisés proposés :"
+    "🔤 Noms normalisés proposés :"
   j=1
   for col in "${FINAL_COLS[@]}"; do
     gum style "  $j. $col"
@@ -197,7 +200,6 @@ AI_COL=""
 
 if gum confirm "➕ Créer un champ auto incrément (PRIMARY KEY) ?"; then
   default_name="id"
-  # si 'id' existe déjà, propose 'row_id'
   for c in "${FINAL_COLS[@]}"; do
     if [ "$c" = "id" ]; then
       default_name="row_id"
@@ -207,11 +209,8 @@ if gum confirm "➕ Créer un champ auto incrément (PRIMARY KEY) ?"; then
 
   AI_COL=$(gum input --prompt "🔑 Nom de la colonne auto-incrément : " --value "$default_name")
   [ -z "$AI_COL" ] && AI_COL="$default_name"
-
-  # normalisation légère pour être safe
   AI_COL=$(normalize_col "$AI_COL" 0)
 
-  # sécurité : éviter collision
   for c in "${FINAL_COLS[@]}"; do
     if [ "$c" = "$AI_COL" ]; then
       gum style --foreground 196 "❌ Le nom '$AI_COL' existe déjà parmi les colonnes détectées."
@@ -220,7 +219,6 @@ if gum confirm "➕ Créer un champ auto incrément (PRIMARY KEY) ?"; then
   done
 
   USE_AI=1
-
   gum style --foreground 82 "✅ Colonne auto-incrément utilisée : \`$AI_COL\`"
 fi
 
@@ -292,12 +290,45 @@ for col in "${FINAL_COLS[@]}"; do
 done
 
 ########################################
+# Détection FIELDS_CLAUSE (auto)
+########################################
+
+detect_fields_clause() {
+  local sep="$1"
+  local file="$2"
+
+  local mysql_sep="$sep"
+  if [ "$sep" = $'\t' ]; then
+    mysql_sep='\t'
+  fi
+
+  # Cas fichiers pipe (open data type RPPS/etc) : par défaut brut
+  if [ "$sep" = "|" ]; then
+    # Check rapide sur 500 lignes pour voir s'il y a beaucoup de champs vraiment quotés
+    local quoted_count
+    quoted_count=$(head -n 500 "$file" | grep -Eo '(^|\|)"[^"]*"' | wc -l || true)
+    if [ "$quoted_count" -gt 5 ]; then
+      echo "FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\"'"
+    else
+      echo "FIELDS TERMINATED BY '|'"
+    fi
+    return
+  fi
+
+  # Cas séparateur standard (; , \t) : CSV classique
+  echo "FIELDS TERMINATED BY '${mysql_sep}' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\"'"
+}
+
+# Pour ton exemple `;` sans guillemets : ça donnera bien FIELDS TERMINATED BY ';' OPTIONALLY...
+# (ce qui est accepté même sans guillemets dans les données)
+
+########################################
 # Import des données (LOAD DATA LOCAL INFILE)
 ########################################
 
-# Séparateur pour MySQL
+# Séparateur MySQL
 if [ "$SEP" = $'\t' ]; then
-  MYSQL_SEP='\t'
+  MYSQL_SEP=$'\t'
 else
   MYSQL_SEP="$SEP"
 fi
@@ -307,11 +338,7 @@ if [ "$IGNORE_FIRST_LINE" -eq 1 ]; then
   IGNORE_CLAUSE="IGNORE 1 LINES"
 fi
 
-# FIELDS clause :
-FIELDS_CLAUSE="FIELDS TERMINATED BY '${MYSQL_SEP}'"
-if [ "$MYSQL_SEP" != '|' ]; then
-  FIELDS_CLAUSE+=" OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\"'"
-fi
+FIELDS_CLAUSE=$(detect_fields_clause "$MYSQL_SEP" "$CSV_PATH")
 
 gum style --foreground 111 "📥 Import des données dans '$TABLE_NAME'..."
 gum style --foreground 99  "ℹ️ Mode FIELDS: ${FIELDS_CLAUSE}"

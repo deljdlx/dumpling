@@ -57,7 +57,7 @@ testConnection() {
     then
         gum style --foreground 82 "✅ Connexion MySQL OK."
     else
-        gum style --foreground 196 "❌ Échec de la connexion MySQL. Vérifie l'hôte, le port, l'utilisateur ou le mot de passe."
+        gum style --foreground 196 "❌ Échec de la connexion MySQL. Vérifie l'hôte, le port, l'utilisateur ou le mot de passe. ${DB_USER}@${MYSQL_HOST}:${MYSQL_PORT}"
         exit 1
     fi
 }
